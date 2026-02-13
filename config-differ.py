@@ -184,6 +184,90 @@ class ConfigDiffer:
         )
         
         return self._colorize_diff(diff)
+
+    def generate_html_diff(self, file1: str, file2: str) -> str:
+        """生成HTML格式diff"""
+        file_type = self.detect_type(file1)
+        content1 = self.read_file(file1)
+        content2 = self.read_file(file2)
+
+        try:
+            if file_type == 'yaml':
+                data1 = self.parse_yaml(content1)
+                data2 = self.parse_yaml(content2)
+                text1 = yaml.dump(data1, default_flow_style=False, sort_keys=True)
+                text2 = yaml.dump(data2, default_flow_style=False, sort_keys=True)
+                lines1 = text1.splitlines()
+                lines2 = text2.splitlines()
+            elif file_type == 'json':
+                data1 = self.parse_json(content1)
+                data2 = self.parse_json(content2)
+                text1 = json.dumps(data1, indent=2, sort_keys=True)
+                text2 = json.dumps(data2, indent=2, sort_keys=True)
+                lines1 = text1.splitlines()
+                lines2 = text2.splitlines()
+            else:
+                lines1 = self.normalize_text(content1, file_type)
+                lines2 = self.normalize_text(content2, file_type)
+        except Exception:
+            # 结构化解析失败时回退到原始文本对比
+            lines1 = content1.splitlines()
+            lines2 = content2.splitlines()
+
+        html_diff = HtmlDiff(wrapcolumn=120)
+        html = html_diff.make_file(
+            lines1,
+            lines2,
+            fromdesc=file1,
+            todesc=file2,
+            context=True,
+            numlines=self.context_lines
+        )
+        return self._apply_dark_theme(html)
+
+    def _apply_dark_theme(self, html: str) -> str:
+        """为HtmlDiff报告注入暗色主题样式"""
+        dark_css = """
+<style>
+body {
+  background: #0f1117;
+  color: #e6edf3;
+  font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+}
+table.diff {
+  border-collapse: collapse;
+  width: 100%;
+  border: 1px solid #30363d;
+  background: #161b22;
+}
+.diff_header {
+  background: #1f2937 !important;
+  color: #c9d1d9 !important;
+}
+td, th {
+  border: 1px solid #30363d;
+}
+td.diff_next {
+  background: #111827 !important;
+}
+.diff_add {
+  background: #0f5132 !important;
+  color: #d1fae5 !important;
+}
+.diff_sub {
+  background: #5f2120 !important;
+  color: #fee2e2 !important;
+}
+.diff_chg {
+  background: #6b4f1d !important;
+  color: #fff7d6 !important;
+}
+a {
+  color: #7dd3fc;
+}
+</style>
+"""
+        return html.replace("</head>", f"{dark_css}\n</head>")
     
     def _colorize_diff(self, diff) -> str:
         """彩色化diff输出"""
@@ -354,9 +438,16 @@ def main():
             print(f"{Fore.GREEN}相同: {same}")
             print(f"{Fore.RED}差异: {diff}")
             print(f"总计: {same + diff}")
+            if args.html:
+                print(f"{Fore.YELLOW}警告: 目录模式暂不支持HTML报告输出{Style.RESET_ALL}")
         else:
             same, diff = differ.compare(args.file1, args.file2)
             print(diff)
+            if args.html:
+                html_content = differ.generate_html_diff(args.file1, args.file2)
+                with open(args.html, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                print(f"{Fore.CYAN}HTML报告已生成: {args.html}{Style.RESET_ALL}")
             sys.exit(0 if same else 1)
     
     except Exception as e:
