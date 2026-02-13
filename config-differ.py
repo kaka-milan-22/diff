@@ -31,6 +31,8 @@ from typing import Dict, List, Tuple, Optional
 from difflib import unified_diff, HtmlDiff
 from colorama import init, Fore, Style
 import configparser
+from urllib.parse import urlparse, unquote
+import shlex
 
 init(autoreset=True)
 
@@ -67,22 +69,43 @@ class ConfigDiffer:
             import urllib.request
             with urllib.request.urlopen(filepath) as response:
                 return response.read().decode('utf-8')
+
+        if filepath.startswith('ssh://'):
+            # SSH远程文件 (ssh://[user@]host[:port]/path)
+            parsed = urlparse(filepath)
+            host = parsed.hostname
+            if not host:
+                raise Exception("无效的SSH地址")
+            user = parsed.username
+            port = parsed.port
+            path = unquote(parsed.path or '/')
+            target = f"{user}@{host}" if user else host
+            return self._read_ssh_file(target, path, port)
         
         if ':' in filepath and not filepath.startswith('/'):
             # SSH远程文件 (host:path)
             host, path = filepath.split(':', 1)
-            result = subprocess.run(
-                ['ssh', host, f'cat {path}'],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode != 0:
-                raise Exception(f"无法读取远程文件: {result.stderr}")
-            return result.stdout
+            return self._read_ssh_file(host, path)
         
         # 本地文件
         with open(filepath, 'r', encoding='utf-8') as f:
             return f.read()
+
+    def _read_ssh_file(self, host: str, path: str, port: Optional[int] = None) -> str:
+        """通过SSH读取远程文件"""
+        quoted_path = shlex.quote(path)
+        cmd = ['ssh']
+        if port:
+            cmd.extend(['-p', str(port)])
+        cmd.extend([host, f'cat {quoted_path}'])
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            raise Exception(f"无法读取远程文件: {result.stderr}")
+        return result.stdout
     
     def normalize_text(self, content: str, file_type: str) -> List[str]:
         """标准化文本（去除注释、空行等）"""
@@ -375,6 +398,12 @@ def main():
 
   # 对比本地和远程
   %(prog)s local.conf server1:/etc/nginx/nginx.conf
+
+    # 对比两个远程服务器的文件
+    %(prog)s server1:/etc/nginx/nginx.conf server2:/etc/nginx/nginx.conf
+
+    # 使用ssh://格式（支持端口）
+    %(prog)s ssh://user@server1:2222/etc/nginx/nginx.conf ssh://server2/etc/nginx/nginx.conf
 
   # 对比两个目录
   %(prog)s -d /etc/nginx/prod /etc/nginx/test
